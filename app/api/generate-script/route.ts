@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
+import { auth, clerkClient } from "@clerk/nextjs/server";
 
 type RequestBody = {
   topic: string;
@@ -11,9 +11,20 @@ const FREE_LIMIT = 3;
 
 export async function POST(request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const isPro = cookieStore.get("pro")?.value === "1";
-    const freeCount = parseInt(cookieStore.get("free_count")?.value || "0", 10);
+    const { userId } = await auth();
+
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const client = await clerkClient();
+    const user = await client.users.getUser(userId);
+
+    const isPro = user.publicMetadata?.pro === true;
+    const freeCount =
+      typeof user.privateMetadata?.freeCount === "number"
+        ? user.privateMetadata.freeCount
+        : 0;
 
     if (!isPro && freeCount >= FREE_LIMIT) {
       return NextResponse.json(
@@ -54,23 +65,20 @@ export async function POST(request: NextRequest) {
     // Simulate network delay
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    const response = NextResponse.json({
+    // Increment freeCount for non-pro users
+    if (!isPro) {
+      await client.users.updateUserMetadata(userId, {
+        privateMetadata: {
+          freeCount: freeCount + 1,
+        },
+      });
+    }
+
+    return NextResponse.json({
       hook: hooks[tone],
       body: bodies[tone],
       cta: ctas[tone],
     });
-
-    // Increment free_count for non-pro users
-    if (!isPro) {
-      response.cookies.set("free_count", String(freeCount + 1), {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: 60 * 60 * 24 * 365, // 1 year
-      });
-    }
-
-    return response;
   } catch {
     return NextResponse.json(
       { error: "Failed to generate script" },
