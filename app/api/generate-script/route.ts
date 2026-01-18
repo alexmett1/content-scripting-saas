@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
 
 type RequestBody = {
   topic: string;
@@ -6,8 +7,21 @@ type RequestBody = {
   length: "30s" | "45s" | "60s";
 };
 
+const FREE_LIMIT = 3;
+
 export async function POST(request: NextRequest) {
   try {
+    const cookieStore = await cookies();
+    const isPro = cookieStore.get("pro")?.value === "1";
+    const freeCount = parseInt(cookieStore.get("free_count")?.value || "0", 10);
+
+    if (!isPro && freeCount >= FREE_LIMIT) {
+      return NextResponse.json(
+        { error: "Free limit reached" },
+        { status: 402 }
+      );
+    }
+
     const body: RequestBody = await request.json();
     const { topic, tone, length } = body;
 
@@ -40,11 +54,23 @@ export async function POST(request: NextRequest) {
     // Simulate network delay
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       hook: hooks[tone],
       body: bodies[tone],
       cta: ctas[tone],
     });
+
+    // Increment free_count for non-pro users
+    if (!isPro) {
+      response.cookies.set("free_count", String(freeCount + 1), {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 60 * 60 * 24 * 365, // 1 year
+      });
+    }
+
+    return response;
   } catch {
     return NextResponse.json(
       { error: "Failed to generate script" },
